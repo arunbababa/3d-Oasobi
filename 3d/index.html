@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Dance - Delicate Art</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background: #1a1a1a;
+            font-family: 'Arial', sans-serif;
+        }
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            filter: brightness(0.7) blur(1px);
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #info {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-size: 16px;
+            z-index: 10;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            text-align: center;
+            opacity: 0.7;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 24px;
+            z-index: 100;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.8);
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div class="loading" id="loading">Loading...</div>
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+        <div id="info">Move your hands gently | Try finger snap!</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script type="module">
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        // Three.js Setup
+        const canvas = document.getElementById('canvas');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        camera.position.z = 5;
+
+        // Soft lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        scene.add(ambientLight);
+
+        // Delicate particle system - fewer particles, more refined
+        const particleCount = 300;
+        const particles = [];
+        const particleGeometry = new THREE.SphereGeometry(0.02, 6, 6);
+
+        for (let i = 0; i < particleCount; i++) {
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0,
+                blending: THREE.AdditiveBlending
+            });
+            const particle = new THREE.Mesh(particleGeometry, material);
+            scene.add(particle);
+            particles.push({
+                mesh: particle,
+                velocity: new THREE.Vector3(),
+                life: 0,
+                maxLife: 1,
+                birthTime: 0
+            });
+        }
+
+        // Snap explosion particles
+        const snapParticles = [];
+        const snapParticleCount = 100;
+        for (let i = 0; i < snapParticleCount; i++) {
+            const geometry = new THREE.SphereGeometry(0.04, 6, 6);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0,
+                blending: THREE.AdditiveBlending
+            });
+            const particle = new THREE.Mesh(geometry, material);
+            scene.add(particle);
+            snapParticles.push({
+                mesh: particle,
+                velocity: new THREE.Vector3(),
+                life: 0
+            });
+        }
+
+        // Snap shockwave rings
+        const snapRings = [];
+        for (let i = 0; i < 5; i++) {
+            const geometry = new THREE.RingGeometry(0.1, 0.15, 32);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending
+            });
+            const ring = new THREE.Mesh(geometry, material);
+            scene.add(ring);
+            snapRings.push({
+                mesh: ring,
+                life: 0,
+                scale: 1
+            });
+        }
+
+        // Hand skeleton lines - showing hand structure
+        const handLines = [];
+        for (let h = 0; h < 2; h++) {
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],        // Thumb
+                [0, 5], [5, 6], [6, 7], [7, 8],        // Index
+                [0, 9], [9, 10], [10, 11], [11, 12],   // Middle
+                [0, 13], [13, 14], [14, 15], [15, 16], // Ring
+                [0, 17], [17, 18], [18, 19], [19, 20], // Pinky
+                [5, 9], [9, 13], [13, 17]              // Palm
+            ];
+
+            connections.forEach(() => {
+                const geometry = new THREE.BufferGeometry();
+                const material = new THREE.LineBasicMaterial({
+                    color: 0xffffff,
+                    transparent: true,
+                    opacity: 0,
+                    linewidth: 2
+                });
+                const line = new THREE.Line(geometry, material);
+                scene.add(line);
+                handLines.push({
+                    line: line,
+                    points: []
+                });
+            });
+        }
+
+        // Fingertip trails - subtle and elegant
+        const fingertipTrails = [];
+        for (let i = 0; i < 10; i++) { // 5 fingers × 2 hands
+            const trailLength = 20;
+            const trailPoints = [];
+            const geometry = new THREE.BufferGeometry();
+            const material = new THREE.LineBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0,
+                linewidth: 1,
+                blending: THREE.AdditiveBlending
+            });
+            const trail = new THREE.Line(geometry, material);
+            scene.add(trail);
+            fingertipTrails.push({
+                line: trail,
+                points: [],
+                maxLength: trailLength
+            });
+        }
+
+        // Landmark spheres - showing key points
+        const landmarkSpheres = [];
+        for (let i = 0; i < 42; i++) { // 21 landmarks × 2 hands
+            const geometry = new THREE.SphereGeometry(0.03, 8, 8);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0
+            });
+            const sphere = new THREE.Mesh(geometry, material);
+            scene.add(sphere);
+            landmarkSpheres.push(sphere);
+        }
+
+        // MediaPipe Setup
+        let handLandmarker;
+        let video = document.getElementById('video');
+        let lastVideoTime = -1;
+        let results;
+        let particleIndex = 0;
+        let snapParticleIndex = 0;
+        let snapRingIndex = 0;
+        let previousFingerPositions = [];
+        let previousThumbMiddleDistance = [null, null]; // For each hand
+        let snapCooldown = [0, 0]; // Cooldown for each hand
+        let time = 0;
+
+        async function initializeHandTracking() {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numHands: 2,
+                    minHandDetectionConfidence: 0.7,
+                    minHandPresenceConfidence: 0.7,
+                    minTrackingConfidence: 0.7
+                });
+
+                document.getElementById('loading').style.display = 'none';
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        facingMode: 'user'
+                    }
+                });
+                video.srcObject = stream;
+
+                video.addEventListener('loadeddata', predictWebcam);
+            } catch (error) {
+                console.error('Error initializing:', error);
+                document.getElementById('loading').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        function predictWebcam() {
+            if (video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                results = handLandmarker.detectForVideo(video, Date.now());
+            }
+            requestAnimationFrame(predictWebcam);
+        }
+
+        function worldToScreen(x, y, z) {
+            return {
+                x: (x - 0.5) * 10,
+                y: -(y - 0.5) * 10,
+                z: -z * 8
+            };
+        }
+
+        // Calculate finger curl (0-1, 0=straight, 1=curled)
+        function getFingerCurl(hand, fingerIndex) {
+            const fingerBases = [1, 5, 9, 13, 17];
+            const fingerTips = [4, 8, 12, 16, 20];
+
+            const base = hand[fingerBases[fingerIndex]];
+            const tip = hand[fingerTips[fingerIndex]];
+            const wrist = hand[0];
+
+            const baseToWrist = Math.sqrt(
+                Math.pow(base.x - wrist.x, 2) +
+                Math.pow(base.y - wrist.y, 2) +
+                Math.pow(base.z - wrist.z, 2)
+            );
+
+            const tipToWrist = Math.sqrt(
+                Math.pow(tip.x - wrist.x, 2) +
+                Math.pow(tip.y - wrist.y, 2) +
+                Math.pow(tip.z - wrist.z, 2)
+            );
+
+            return Math.max(0, Math.min(1, 1 - (tipToWrist / (baseToWrist * 2))));
+        }
+
+        // Detect finger snap
+        function detectSnap(hand, handIndex) {
+            if (snapCooldown[handIndex] > 0) return false;
+
+            // Thumb tip (4) and middle finger tip (12)
+            const thumb = hand[4];
+            const middle = hand[12];
+
+            const distance = Math.sqrt(
+                Math.pow(thumb.x - middle.x, 2) +
+                Math.pow(thumb.y - middle.y, 2) +
+                Math.pow(thumb.z - middle.z, 2)
+            );
+
+            const prevDistance = previousThumbMiddleDistance[handIndex];
+
+            if (prevDistance !== null) {
+                // Detect snap: fingers were close and suddenly separated
+                const wasClose = prevDistance < 0.05;
+                const nowFar = distance > 0.08;
+                const velocity = distance - prevDistance;
+
+                if (wasClose && nowFar && velocity > 0.03) {
+                    previousThumbMiddleDistance[handIndex] = distance;
+                    snapCooldown[handIndex] = 30; // 30 frames cooldown
+                    return true;
+                }
+            }
+
+            previousThumbMiddleDistance[handIndex] = distance;
+            return false;
+        }
+
+        // Trigger snap effect
+        function triggerSnap(position, handIndex) {
+            const snapColor = handIndex === 0 ? 0xff6b9d : 0xffd700;
+
+            // Explosion particles
+            for (let i = 0; i < 30; i++) {
+                const p = snapParticles[snapParticleIndex];
+                p.mesh.position.copy(position);
+
+                // Radial explosion
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.random() * Math.PI;
+                const speed = 0.3 + Math.random() * 0.3;
+
+                p.velocity.set(
+                    Math.sin(phi) * Math.cos(theta) * speed,
+                    Math.sin(phi) * Math.sin(theta) * speed,
+                    Math.cos(phi) * speed
+                );
+
+                p.life = 1;
+                p.mesh.material.color.setHex(snapColor);
+
+                snapParticleIndex = (snapParticleIndex + 1) % snapParticles.length;
+            }
+
+            // Shockwave ring
+            const ring = snapRings[snapRingIndex];
+            ring.mesh.position.copy(position);
+            ring.mesh.lookAt(camera.position);
+            ring.life = 1;
+            ring.scale = 1;
+            ring.mesh.material.color.setHex(snapColor);
+            snapRingIndex = (snapRingIndex + 1) % snapRings.length;
+        }
+
+        // Animation Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.01;
+
+            // Update snap cooldowns
+            snapCooldown[0] = Math.max(0, snapCooldown[0] - 1);
+            snapCooldown[1] = Math.max(0, snapCooldown[1] - 1);
+
+            // Update snap particles
+            snapParticles.forEach(p => {
+                if (p.life > 0) {
+                    p.mesh.position.add(p.velocity);
+                    p.velocity.multiplyScalar(0.94);
+                    p.life -= 0.03;
+                    p.mesh.material.opacity = p.life * 0.9;
+                    p.mesh.scale.setScalar(p.life);
+                }
+            });
+
+            // Update snap rings
+            snapRings.forEach(ring => {
+                if (ring.life > 0) {
+                    ring.life -= 0.02;
+                    ring.scale += 0.3;
+                    ring.mesh.scale.setScalar(ring.scale);
+                    ring.mesh.material.opacity = ring.life * 0.7;
+                }
+            });
+
+            // Update regular particles with gentle physics
+            particles.forEach(p => {
+                if (p.life > 0) {
+                    p.mesh.position.add(p.velocity);
+                    p.velocity.multiplyScalar(0.97);
+                    p.life -= 0.015;
+                    const lifeRatio = p.life / p.maxLife;
+
+                    // Soft fade out
+                    p.mesh.material.opacity = lifeRatio * 0.5;
+                    p.mesh.scale.setScalar(lifeRatio * 0.8);
+
+                    // Gentle floating
+                    const age = time - p.birthTime;
+                    p.mesh.position.y += Math.sin(age * 2) * 0.002;
+                }
+            });
+
+            // Reset all visual elements
+            handLines.forEach(hl => hl.line.material.opacity = 0);
+            landmarkSpheres.forEach(s => s.material.opacity = 0);
+
+            // Process hand landmarks
+            if (results && results.landmarks && results.landmarks.length > 0) {
+                let lineIndex = 0;
+
+                results.landmarks.forEach((hand, handIndex) => {
+                    const handColor = handIndex === 0 ? 0x88ccff : 0xffaa88;
+
+                    // Detect finger snap
+                    if (detectSnap(hand, handIndex)) {
+                        const thumb = hand[4];
+                        const middle = hand[12];
+                        const snapPos = worldToScreen(
+                            (thumb.x + middle.x) / 2,
+                            (thumb.y + middle.y) / 2,
+                            (thumb.z + middle.z) / 2
+                        );
+                        triggerSnap(new THREE.Vector3(snapPos.x, snapPos.y, snapPos.z), handIndex);
+                    }
+
+                    // Calculate average finger curl for this hand
+                    let totalCurl = 0;
+                    for (let i = 0; i < 5; i++) {
+                        totalCurl += getFingerCurl(hand, i);
+                    }
+                    const avgCurl = totalCurl / 5;
+
+                    // Draw hand structure
+                    const connections = [
+                        [0, 1], [1, 2], [2, 3], [3, 4],
+                        [0, 5], [5, 6], [6, 7], [7, 8],
+                        [0, 9], [9, 10], [10, 11], [11, 12],
+                        [0, 13], [13, 14], [14, 15], [15, 16],
+                        [0, 17], [17, 18], [18, 19], [19, 20],
+                        [5, 9], [9, 13], [13, 17]
+                    ];
+
+                    connections.forEach(([a, b]) => {
+                        const posA = worldToScreen(hand[a].x, hand[a].y, hand[a].z);
+                        const posB = worldToScreen(hand[b].x, hand[b].y, hand[b].z);
+
+                        const hl = handLines[lineIndex++];
+                        if (hl) {
+                            const positions = [posA.x, posA.y, posA.z, posB.x, posB.y, posB.z];
+                            hl.line.geometry.setAttribute('position',
+                                new THREE.Float32BufferAttribute(positions, 3));
+                            hl.line.material.color.setHex(handColor);
+                            hl.line.material.opacity = 0.4 + avgCurl * 0.3;
+                        }
+                    });
+
+                    // Draw all landmarks
+                    hand.forEach((landmark, lmIndex) => {
+                        const pos = worldToScreen(landmark.x, landmark.y, landmark.z);
+                        const sphereIndex = handIndex * 21 + lmIndex;
+                        const sphere = landmarkSpheres[sphereIndex];
+
+                        if (sphere) {
+                            sphere.position.set(pos.x, pos.y, pos.z);
+                            sphere.material.color.setHex(handColor);
+
+                            // Fingertips are more visible
+                            const isFingertip = [4, 8, 12, 16, 20].includes(lmIndex);
+                            sphere.material.opacity = isFingertip ? 0.7 : 0.3;
+                            sphere.scale.setScalar(isFingertip ? 1.5 : 1);
+                        }
+                    });
+
+                    // Fingertip effects
+                    const fingertips = [4, 8, 12, 16, 20];
+                    fingertips.forEach((tipIndex, fingerIndex) => {
+                        const landmark = hand[tipIndex];
+                        const pos = worldToScreen(landmark.x, landmark.y, landmark.z);
+
+                        // Track velocity
+                        const prevPosKey = handIndex * 5 + fingerIndex;
+                        const prevPos = previousFingerPositions[prevPosKey];
+                        let velocity = 0;
+
+                        if (prevPos) {
+                            const dx = pos.x - prevPos.x;
+                            const dy = pos.y - prevPos.y;
+                            const dz = pos.z - prevPos.z;
+                            velocity = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                        }
+                        previousFingerPositions[prevPosKey] = {...pos};
+
+                        // Spawn particles based on subtle movements
+                        const fingerCurl = getFingerCurl(hand, fingerIndex);
+
+                        // More particles when finger is moving or curling
+                        if (velocity > 0.01 || Math.abs(fingerCurl - 0.5) > 0.3) {
+                            const p = particles[particleIndex];
+                            p.mesh.position.set(pos.x, pos.y, pos.z);
+
+                            // Very gentle spread
+                            const spread = 0.03;
+                            p.velocity.set(
+                                (Math.random() - 0.5) * spread,
+                                (Math.random() - 0.5) * spread,
+                                (Math.random() - 0.5) * spread
+                            );
+
+                            p.life = 1;
+                            p.maxLife = 1;
+                            p.birthTime = time;
+
+                            // Color based on curl and hand
+                            const hue = (handIndex * 0.3 + fingerCurl * 0.4 + time * 0.02) % 1;
+                            p.mesh.material.color.setHSL(hue, 0.6, 0.7);
+
+                            particleIndex = (particleIndex + 1) % particles.length;
+                        }
+
+                        // Update fingertip trails
+                        const trailIndex = handIndex * 5 + fingerIndex;
+                        const trail = fingertipTrails[trailIndex];
+
+                        if (trail) {
+                            trail.points.push(pos.x, pos.y, pos.z);
+
+                            if (trail.points.length > trail.maxLength * 3) {
+                                trail.points.splice(0, 3);
+                            }
+
+                            if (trail.points.length >= 6) {
+                                trail.line.geometry.setAttribute('position',
+                                    new THREE.Float32BufferAttribute(trail.points, 3));
+
+                                const hue = (handIndex * 0.3 + fingerIndex * 0.1 + time * 0.02) % 1;
+                                trail.line.material.color.setHSL(hue, 0.7, 0.6);
+                                trail.line.material.opacity = Math.min(velocity * 3, 0.5);
+                            }
+                        }
+                    });
+                });
+            }
+
+            // Fade trails gently
+            fingertipTrails.forEach(trail => {
+                if (trail.line.material.opacity > 0.01) {
+                    trail.line.material.opacity *= 0.96;
+                } else if (trail.points.length > 0) {
+                    trail.points = [];
+                    trail.line.geometry.setAttribute('position',
+                        new THREE.Float32BufferAttribute(trail.points, 3));
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start
+        initializeHandTracking();
+        animate();
+    </script>
+</body>
+</html>
