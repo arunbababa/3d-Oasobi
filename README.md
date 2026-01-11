@@ -2,6 +2,10 @@
 
 Three.js + MediaPipe を使った実験的なビジュアルアートプロジェクト
 
+## このような感じで遊べます
+
+![Videotogif](https://github.com/user-attachments/assets/bce937a5-8cc3-46cf-ac8d-ff34a30d2d0e)
+
 ## プロジェクト
 
 ### 3d - Hand Dance
